@@ -17,6 +17,15 @@ module FitGap
     def call
       skill_comparisons = build_skill_comparisons
       narratives        = generate_narratives(skill_comparisons)
+      fingerprint       = compute_fingerprint
+
+      # Serialize concurrent callers on one (portfolio, vacancy) pair.
+      # pg_advisory_xact_lock is transaction-scoped and auto-released on
+      # commit/rollback, so no manual unlock is needed and the unique index
+      # on (portfolio_id, vacancy_id) is never hit by a race.
+      k1 = "fitgap:#{@portfolio.id}:#{@vacancy.id}".hash & 0x7fffffff
+      k2 = (@portfolio.id ^ @vacancy.id) & 0x7fffffff
+      ActiveRecord::Base.connection.execute("SELECT pg_advisory_xact_lock(#{k1}, #{k2})")
 
       report = FitGapReport.find_or_initialize_by(
         portfolio_id: @portfolio.id,
@@ -27,10 +36,11 @@ module FitGap
         skill_comparisons: skill_comparisons,
         culture_narrative: narratives[:culture],
         overall_narrative: narratives[:overall],
-        generated_at:      Time.current
+        generated_at:      Time.current,
+        source_fingerprint: fingerprint
       )
 
-      Rails.logger.info("[N13] Fit/gap report generated: portfolio=#{@portfolio.id} vacancy=#{@vacancy.id}")
+      Rails.logger.info("[N13] Fit/gap report generated: portfolio=#{@portfolio.id} vacancy=#{@vacancy.id} fingerprint=#{fingerprint}")
       report
     end
 
@@ -62,7 +72,8 @@ module FitGap
           expected_level:  expected_level,
           result:          result,
           delta:           delta,
-          confidence:      portfolio_skill&.dig(:confidence)
+          confidence:      portfolio_skill&.dig(:confidence),
+          overridden:      portfolio_skill ? !!portfolio_skill[:overridden] : false
         }
       end
 
@@ -88,6 +99,31 @@ module FitGap
     def find_portfolio_skill(portfolio_skills, label, skill_id)
       portfolio_skills.find { |s| s[:skill_id] == skill_id && skill_id.present? } ||
         portfolio_skills.find { |s| s[:skill_label].downcase == label.downcase }
+    end
+
+    # Hash of every input that affects the generated report. Changing any skill
+    # level, override level, or override timestamp busts the fingerprint.
+    # AssessorOverride carries `overridden_at` (no updated_at column), so we use
+    # that — including it is what makes the staleness check catch a newly-added
+    # or edited human override (AC8).
+    def compute_fingerprint
+      parts = []
+
+      parts += @portfolio.portfolio_skills.order(:id)
+                       .pluck(:ai_level)
+                       .map { |lvl| "#{lvl}" }
+
+      parts += AssessorOverride.joins(:portfolio_skill)
+                       .where(portfolio_skills: { portfolio_id: @portfolio.id })
+                       .order(:id)
+                       .pluck(:override_level, :overridden_at)
+                       .map { |lvl, ts| "o#{lvl}@#{ts.to_i}" }
+
+      parts += @vacancy.vacancy_skills.order(:id)
+                       .pluck(:skill_label, :expected_level)
+                       .map { |lbl, lvl| "#{lbl}:#{lvl}" }
+
+      Digest::SHA256.hexdigest(parts.join("|"))[0, 16]
     end
 
     def generate_narratives(skill_comparisons)
