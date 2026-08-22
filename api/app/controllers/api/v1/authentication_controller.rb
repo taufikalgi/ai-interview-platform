@@ -10,13 +10,32 @@ module Api
         user = User.find_by(email: params[:email].to_s.downcase)
 
         return json_error('Invalid email or password', :unauthorized) unless user&.authenticate(params[:password])
-
         return json_error('Invalid email or password', :unauthorized) unless user.role == 'admin'
 
         scheme = resolve_scheme
         token  = JsonWebToken.encode({ user_id: user.id, role: user.role, scheme: })
 
         json_response({ token:, user: { id: user.id, email: user.email, role: user.role } })
+      end
+
+      # POST /api/v1/auth/signup
+      def signup
+        user = User.new(
+          email:    params[:email].to_s.downcase,
+          password: params[:password],
+          role:     params[:role].presence || 'user'
+        )
+
+        if user.save
+          scheme = resolve_scheme
+          token  = JsonWebToken.encode({ user_id: user.id, role: user.role, scheme: })
+          json_response(
+            { token:, user: { id: user.id, email: user.email, role: user.role } },
+            :created
+          )
+        else
+          json_error(user.errors.full_messages, :unprocessable_entity)
+        end
       end
 
       private
