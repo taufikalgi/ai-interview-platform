@@ -29,8 +29,15 @@ export default function FitGapReportPage() {
     if (!portfolio) return;
     try {
       const res = await portfoliosApi.getFitGap(portfolio.id, Number(vacancyId));
-      setReport(res.data.report);
-      setGenerating(false);
+      const data: any = res.data;
+      if (data?.status === "generating") {
+        setGenerating(true);
+        return;
+      }
+      if (data?.report) {
+        setReport(data.report);
+        setGenerating(false);
+      }
     } catch (e: any) {
       if (e?.response?.status === 404) {
         try {
@@ -39,6 +46,8 @@ export default function FitGapReportPage() {
         } catch {
           setGenerating(false);
         }
+      } else if (e?.response?.status === 202) {
+        setGenerating(true);
       }
     }
   }, [portfolio, vacancyId]);
@@ -169,9 +178,21 @@ export default function FitGapReportPage() {
               <CardTitle className="text-sm">Culture &amp; Competency Fit</CardTitle>
             </CardHeader>
             <CardContent className="px-4 pb-4">
-              <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
-                {report.culture_narrative || report.overall_narrative}
-              </p>
+              {report.culture_narrative ? (
+                <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap">
+                  {report.culture_narrative}
+                </p>
+              ) : (
+                <p className="text-sm text-muted-foreground italic">
+                  AI culture narrative unavailable — showing overall summary. Structured
+                  skill comparisons above are unaffected.
+                </p>
+              )}
+              {report.overall_narrative && (
+                <p className="text-sm leading-relaxed text-foreground whitespace-pre-wrap mt-3">
+                  {report.overall_narrative}
+                </p>
+              )}
             </CardContent>
           </Card>
 
