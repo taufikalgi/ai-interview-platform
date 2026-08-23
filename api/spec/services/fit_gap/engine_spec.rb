@@ -39,6 +39,17 @@ RSpec.describe FitGap::Engine do
       expect(report.source_fingerprint).to be_a(String)
       expect(report.source_fingerprint.length).to eq(16)
     end
+
+    it "persists skill_comparisons even when Gemini narrative generation fails (AC10)" do
+      failing_client = double("GeminiClient")
+      allow(failing_client).to receive(:generate_content).and_raise(StandardError, "Gemini down")
+      report = described_class.new(portfolio:, vacancy:, gemini_client: failing_client).call
+
+      expect(report).to be_persisted
+      expect(report.skill_comparisons).to be_present
+      expect(report.culture_narrative).to be_nil
+      expect(report.overall_narrative).to be_present
+    end
   end
 
   describe "overridden propagation" do
@@ -75,6 +86,59 @@ RSpec.describe FitGap::Engine do
       f2 = described_class.new(portfolio:, vacancy:, gemini_client:).send(:compute_fingerprint)
 
       expect(f1).not_to eq(f2)
+    end
+  end
+
+  # AC9: generation must be idempotent under concurrent execution. Two threads
+  # racing on the same (portfolio, vacancy) pair must yield exactly one row and
+  # never raise RecordNotUnique. The advisory lock serializes them.
+  # use_transactional_tests is disabled so the rows committed by one thread are
+  # visible to the other (a rolled-back outer transaction would hide them).
+  describe "concurrent generation (AC9 idempotency)" do
+    self.use_transactional_tests = false
+
+    let!(:portfolio) do
+      create(:portfolio).tap do |p|
+        create(:portfolio_skill, portfolio: p, skill_label: "Ruby", ai_level: 3)
+      end
+    end
+    let!(:vacancy) do
+      create(:vacancy).tap do |v|
+        create(:vacancy_skill, vacancy: v, skill_label: "Ruby", expected_level: 3)
+      end
+    end
+
+    after do
+      FitGapReport.where(portfolio_id: portfolio.id, vacancy_id: vacancy.id).delete_all
+      VacancySkill.where(vacancy_id: vacancy.id).delete_all
+      PortfolioSkill.where(portfolio_id: portfolio.id).delete_all
+      Vacancy.where(id: vacancy.id).delete_all
+      Portfolio.where(id: portfolio.id).delete_all
+    end
+
+    it "produces exactly one report row with no RecordNotUnique when two calls race" do
+      errors = []
+      threads = 2.times.map do
+        Thread.new do
+          begin
+            described_class.new(
+              portfolio: portfolio,
+              vacancy:   vacancy,
+              gemini_client: double("GeminiClient", generate_content: {
+                "culture_narrative" => "c", "overall_narrative" => "o"
+              })
+            ).call
+          rescue StandardError => e
+            errors << e
+          end
+        end
+      end
+      threads.each(&:join)
+
+      expect(errors).to be_empty
+      expect(
+        FitGapReport.where(portfolio_id: portfolio.id, vacancy_id: vacancy.id).count
+      ).to eq(1)
     end
   end
 end
