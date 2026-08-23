@@ -9,7 +9,7 @@ jobs:
       postgres:
         image: postgres:15
         env:
-          POSTGRES_PASSWORD: postgres
+          POSTGRES_PASSWORD: ${{ secrets.DB_PASSWORD || 'postgres' }}
         ports:
           - "5432:5432"
         options: >-
@@ -26,17 +26,17 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-    env: # temporary, github secrets/vars is the better way to manage these values
-      RAILS_ENV: test
-      DB_HOST: localhost
-      DB_PORT: 5432
-      DB_USERNAME: postgres
-      DB_PASSWORD: postgres
-      DB_NAME: rakamin_test
-      REDIS_URL: redis://localhost:6379/0
-      GEMINI_API_KEY: dummy
-      SECRET_KEY_BASE: dummysecret
-      ALLOWED_ORIGINS: http://localhost:3000
+    env:
+      RAILS_ENV: ${{ vars.RAILS_ENV || 'test' }}
+      DB_HOST: ${{ vars.DB_HOST || 'localhost' }}
+      DB_PORT: ${{ vars.DB_PORT || '5432' }}
+      DB_USERNAME: ${{ vars.DB_USERNAME || 'postgres' }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD || 'postgres' }}
+      DB_NAME: ${{ vars.DB_NAME || 'rakamin_test' }}
+      REDIS_URL: ${{ vars.REDIS_URL || 'redis://localhost:6379/0' }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      SECRET_KEY_BASE: ${{ secrets.SECRET_KEY_BASE }}
+      ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS || 'http://localhost:3000' }}
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
