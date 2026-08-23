@@ -20,25 +20,31 @@ module FitGap
       fingerprint       = compute_fingerprint
 
       # Serialize concurrent callers on one (portfolio, vacancy) pair.
-      # pg_advisory_xact_lock is transaction-scoped and auto-released on
-      # commit/rollback, so no manual unlock is needed and the unique index
-      # on (portfolio_id, vacancy_id) is never hit by a race.
+      # pg_advisory_xact_lock is transaction-scoped: it is only held while a
+      # transaction is open, so the lock MUST wrap the find-or-create below.
+      # Without the surrounding transaction the SELECT would autocommit and the
+      # lock would release before the unique index is touched, letting two
+      # racers both insert and raise RecordNotUnique.
       k1 = "fitgap:#{@portfolio.id}:#{@vacancy.id}".hash & 0x7fffffff
       k2 = (@portfolio.id ^ @vacancy.id) & 0x7fffffff
-      ActiveRecord::Base.connection.execute("SELECT pg_advisory_xact_lock(#{k1}, #{k2})")
 
-      report = FitGapReport.find_or_initialize_by(
-        portfolio_id: @portfolio.id,
-        vacancy_id:   @vacancy.id
-      )
+      report = ActiveRecord::Base.transaction do
+        ActiveRecord::Base.connection.execute("SELECT pg_advisory_xact_lock(#{k1}, #{k2})")
 
-      report.update!(
-        skill_comparisons: skill_comparisons,
-        culture_narrative: narratives[:culture],
-        overall_narrative: narratives[:overall],
-        generated_at:      Time.current,
-        source_fingerprint: fingerprint
-      )
+        r = FitGapReport.find_or_initialize_by(
+          portfolio_id: @portfolio.id,
+          vacancy_id:   @vacancy.id
+        )
+
+        r.update!(
+          skill_comparisons: skill_comparisons,
+          culture_narrative: narratives[:culture],
+          overall_narrative: narratives[:overall],
+          generated_at:      Time.current,
+          source_fingerprint: fingerprint
+        )
+        r
+      end
 
       Rails.logger.info("[N13] Fit/gap report generated: portfolio=#{@portfolio.id} vacancy=#{@vacancy.id} fingerprint=#{fingerprint}")
       report
