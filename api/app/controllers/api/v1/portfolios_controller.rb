@@ -91,7 +91,7 @@ module Api
           return json_error("Portfolio is not ready (status: #{portfolio.generation_status})", :unprocessable_entity)
         end
 
-        FitGapReport.find_by(portfolio_id: portfolio.id, vacancy_id: vacancy.id)&.destroy
+        # Preserve existing report for atomic update in worker to prevent data loss on failure
         FitGapGeneratorWorker.perform_async(portfolio.id, vacancy.id)
 
         render json: { status: "generating", message: "Fit/gap report regeneration queued" }, status: :accepted
@@ -119,8 +119,9 @@ module Api
           return json_response(report: fit_gap_json(existing))
         end
 
-        # Stale or missing → destroy stale row (if any) and enqueue regeneration.
-        existing&.destroy
+        # Stale or missing → enqueue regeneration.
+        # Existing report is preserved and replaced atomically inside FitGap::Engine
+        # so that a worker failure does not leave the report unavailable.
         FitGapGeneratorWorker.perform_async(portfolio.id, vacancy.id)
         render json: { status: "generating", message: "Fit/gap report generation queued" }, status: :accepted
       rescue ActiveRecord::RecordNotFound
@@ -138,6 +139,7 @@ module Api
 
         vacancy = Vacancy.find_by(id: params[:vacancy_id])
         if vacancy && fitgap_stale?(report, portfolio, vacancy)
+          FitGapGeneratorWorker.perform_async(portfolio.id, vacancy.id)
           return render json: { status: "generating", message: "Report stale — regeneration queued" }, status: :accepted
         end
 
