@@ -89,6 +89,20 @@ RSpec.describe FitGap::Engine do
     end
   end
 
+  describe "advisory lock key determinism" do
+    it "produces a deterministic 64-bit integer consistent across separate processes" do
+      engine1 = described_class.new(portfolio:, vacancy:, gemini_client:)
+      engine2 = described_class.new(portfolio:, vacancy:, gemini_client:)
+
+      expect(engine1.send(:advisory_lock_key)).to eq(engine2.send(:advisory_lock_key))
+      expect(engine1.send(:advisory_lock_key)).to be_a(Integer)
+
+      # Deterministic check matching external process calculation
+      subshell_key = `ruby -r digest -e 'puts Digest::SHA256.digest("fitgap:#{portfolio.id}:#{vacancy.id}")[0...8].unpack1("q>")'`.strip.to_i
+      expect(engine1.send(:advisory_lock_key)).to eq(subshell_key)
+    end
+  end
+
   # AC9: generation must be idempotent under concurrent execution. Two threads
   # racing on the same (portfolio, vacancy) pair must yield exactly one row and
   # never raise RecordNotUnique. The advisory lock serializes them.

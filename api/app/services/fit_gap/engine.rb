@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "digest"
+
 module FitGap
   # N13: Generates a fit/gap report comparing a portfolio against a vacancy.
   # Uses rule-based comparison for skill levels + Gemini Flash for culture narrative.
@@ -25,11 +27,17 @@ module FitGap
       # Without the surrounding transaction the SELECT would autocommit and the
       # lock would release before the unique index is touched, letting two
       # racers both insert and raise RecordNotUnique.
-      k1 = "fitgap:#{@portfolio.id}:#{@vacancy.id}".hash & 0x7fffffff
-      k2 = (@portfolio.id ^ @vacancy.id) & 0x7fffffff
+      #
+      # Note: We use a deterministic 64-bit signed integer derived from SHA256
+      # rather than Ruby's String#hash (which has a per-process randomized seed)
+      # so that Puma web workers and Sidekiq background workers across processes
+      # serialize on the exact same lock key.
+      lock_key = advisory_lock_key
 
       report = ActiveRecord::Base.transaction do
-        ActiveRecord::Base.connection.execute("SELECT pg_advisory_xact_lock(#{k1}, #{k2})")
+        ActiveRecord::Base.connection.execute(
+          ActiveRecord::Base.sanitize_sql_array(["SELECT pg_advisory_xact_lock(?)", lock_key])
+        )
 
         r = FitGapReport.find_or_initialize_by(
           portfolio_id: @portfolio.id,
@@ -186,6 +194,13 @@ module FitGap
       exceeds = comparisons.count { |c| c[:result] == 'exceed' }
 
       "Candidate shows #{matches} skill matches, #{exceeds} exceeds, and #{gaps} gaps against role requirements."
+    end
+
+    # Deterministic 64-bit signed integer key for pg_advisory_xact_lock(bigint).
+    # Uses SHA256 rather than Ruby's process-salted Object#hash to ensure cross-process
+    # synchronization across all Puma workers and Sidekiq threads.
+    def advisory_lock_key
+      Digest::SHA256.digest("fitgap:#{@portfolio.id}:#{@vacancy.id}")[0...8].unpack1('q>')
     end
   end
 end
