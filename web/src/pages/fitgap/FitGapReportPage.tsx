@@ -31,6 +31,8 @@ export default function FitGapReportPage() {
       const res = await portfoliosApi.getFitGap(portfolio.id, Number(vacancyId));
       const data: any = res.data;
       if (data?.status === "generating") {
+        // The API keeps the previous report available while regenerating.
+        if (data.report) setReport(data.report);
         setGenerating(true);
         return;
       }
@@ -75,7 +77,6 @@ export default function FitGapReportPage() {
     setRegenerating(true);
     try {
       await portfoliosApi.regenerateFitGap(portfolio.id, Number(vacancyId));
-      setReport(null);
       setGenerating(true);
     } finally {
       setRegenerating(false);
@@ -150,10 +151,18 @@ export default function FitGapReportPage() {
       </div>
 
       {/* Generating */}
-      {generating && (
+      {generating && !report && (
         <div className="border rounded-lg p-12 text-center space-y-3">
           <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto" />
           <p className="text-sm text-muted-foreground">Generating fit/gap report...</p>
+        </div>
+      )}
+
+      {/* Regenerating with the previous report still visible */}
+      {generating && report && (
+        <div className="border rounded-lg p-3 flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Regenerating report — showing the last generated version until it finishes.
         </div>
       )}
 

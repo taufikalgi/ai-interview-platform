@@ -140,7 +140,14 @@ module Api
         vacancy = Vacancy.find_by(id: params[:vacancy_id])
         if vacancy && fitgap_stale?(report, portfolio, vacancy)
           FitGapGeneratorWorker.perform_async(portfolio.id, vacancy.id)
-          return render json: { status: "generating", message: "Report stale — regeneration queued" }, status: :accepted
+          # Keep the previous report available while the new one is generated.
+          # `stale: true` makes it explicit that this is not fresh data.
+          return render json: {
+            status: "generating",
+            stale: true,
+            report: fit_gap_json(report),
+            message: "Report stale — regeneration queued"
+          }, status: :accepted
         end
 
         json_response(report: fit_gap_json(report))
